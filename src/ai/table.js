@@ -20,3 +20,15 @@ export function readTable(engine) {
     for (let r = 1; r <= used.r2; r++) rows.push(read(r))
     return { header, rows, colCount }
 }
+
+/** What the format applier needs: used size, cell text, current style patches, freeze. */
+export function formatView(engine) {
+    const used = engine.usedRange()
+    return {
+        rowCount: used ? used.r2 + 1 : 0,
+        colCount: used ? used.c2 + 1 : 0,
+        text: (r, c) => engine.getText(r, c),
+        patch: (r, c) => engine.getStylePatch(r, c),
+        frozenRows: engine.frozenRows,
+    }
+}

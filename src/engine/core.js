@@ -653,9 +653,12 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         return ka.every(k => a[k] === b[k])
     }
 
-    /** Merge a patch into a cell's style, dropping properties equal to the default. */
-    function mergedPatch(k, patch) {
-        const next = { ...(styles.get(k) || {}), ...patch }
+    /**
+     * Merge a patch into a cell's style (or, with a replacement, use that
+     * instead of the current style), dropping properties equal to the default.
+     */
+    function mergedPatch(k, patch, replacement) {
+        const next = replacement ? { ...replacement } : { ...(styles.get(k) || {}), ...patch }
         for (const p of Object.keys(next)) if (next[p] === DEFAULT_STYLE[p]) delete next[p]
         return next
     }
@@ -668,6 +671,28 @@ export function createEngine(initialRows = 50, initialCols = 50) {
                     const k = keyOf(r, c)
                     setStylePatch(k, mergedPatch(k, patch))
                 }
+            }
+        }).changed
+    }
+
+    /**
+     * Apply a planned format (see src/ai/formatApplier.js): complete style
+     * patches per cell, column widths, an optional freeze, then auto-fit
+     * measured with the new styles. One undo step; returns false (and
+     * records nothing) when nothing changed.
+     */
+    function applyFormat(plan, measure) {
+        return transact('Format with AI', () => {
+            for (const [rc, patch] of plan.styles) {
+                const [r, c] = rc.split(',').map(Number)
+                const k = keyOf(r, c)
+                setStylePatch(k, mergedPatch(k, null, patch))
+            }
+            for (const [c, w] of plan.widths) setColWidth(c, w)
+            if (plan.freezeRows !== null && plan.freezeRows !== frozen.rows) setFreeze(plan.freezeRows, null)
+            if (plan.autoFit && measure) {
+                const used = usedRange()
+                if (used) for (let c = 0; c <= used.c2; c++) setColWidth(c, fitWidth(c, measure))
             }
         }).changed
     }
@@ -911,10 +936,11 @@ export function createEngine(initialRows = 50, initialCols = 50) {
 
         // reading
         getCell, getValue: valueAt, getRaw: rawAt, getText, getDisplay, getStyle,
+        getStylePatch: (r, c) => styles.get(keyOf(r, c)) || null,
         usedRange, rowId: (r) => rowIds[r],
 
         // editing (each call is one undo step)
-        setCell, setValues, clearRange, clearAll, applyStyle, fill, sort,
+        setCell, setValues, clearRange, clearAll, applyStyle, applyFormat, fill, sort,
         insertRow: (at) => insertRows(at, 1),
         deleteRow: (at) => deleteRows(at, 1),
         insertColumn: (at) => insertCols(at, 1),
