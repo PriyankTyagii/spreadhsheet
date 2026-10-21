@@ -5,7 +5,8 @@
 //    cells       Map<key, Cell>          sparse; key = row * MAX_COLS + col
 //    styles      Map<key, StylePatch>    only the properties a cell overrides
 //    rowHeights / colWidths              sparse Maps of non-default sizes
-//    rowIds      number[]                stable identity per row
+//    rowIds      number[]                stable identity per row (sort "original")
+//    filters     Map<col, FilterSpec>    a view: hides rows, never moves data
 //    frozen      { rows, cols }
 //
 //  Every mutation runs inside a transaction. A transaction records the
@@ -18,6 +19,8 @@ import { compile, collectRefs, evaluate, rewriteFormula, compileTemplate, render
 import { parseLiteral, isErrorValue } from './values.js'
 import { formatValue, generalText } from './numberFormat.js'
 import { buildSeries } from './fill.js'
+import { sortKey, compareKeys, isTotalsRow } from './sort.js'
+import { rowPasses } from './filter.js'
 
 export const DEFAULT_STYLE = Object.freeze({
     bold: false, italic: false, underline: false,
@@ -65,6 +68,22 @@ function deletePolicy(axis, at, n) {
     }
 }
 
+// Sort: a reference to a moved row follows it. A range that spans the
+// whole sorted block (=SUM(J2:J32)) is left alone; so is any other
+// multi-row range, since its rows no longer form one block after a sort.
+function permutePolicy(perm, top, bottom) {
+    return {
+        ref: (r) => (perm.has(r.row) ? { ...r, row: perm.get(r.row) } : r),
+        range: (g) => {
+            const lo = Math.min(g.a.row, g.b.row), hi = Math.max(g.a.row, g.b.row)
+            if (lo === hi && perm.has(lo) && !(lo <= top && hi >= bottom)) {
+                return { a: { ...g.a, row: perm.get(lo) }, b: { ...g.b, row: perm.get(lo) } }
+            }
+            return g
+        },
+    }
+}
+
 export function createEngine(initialRows = 50, initialCols = 50) {
     let rows = initialRows
     let cols = initialCols
@@ -74,7 +93,9 @@ export function createEngine(initialRows = 50, initialCols = 50) {
     let colWidths = new Map()
     let rowIds = []
     let nextRowId = 0
+    let filters = new Map()
     let frozen = { rows: 0, cols: 0 }
+    let sortState = null
 
     // Dependency index. Single references: precedent key → dependent keys.
     // Ranges: column → formula keys with a range covering that column; a
@@ -91,6 +112,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
     const listeners = new Set()
 
     let usedCache = null
+    let hiddenCache = null
 
     // ── Row identity ──
 
@@ -286,6 +308,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         }
         if (p.full || p.changed.size || p.styled) {
             usedCache = null
+            hiddenCache = null
             version++
             for (const fn of listeners) fn()
         }
@@ -374,7 +397,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
             if (ni < 0) return -1
             return isRow ? keyOf(ni, c) : keyOf(r, ni)
         }
-        const out = { cells: [], styles: [], sizes: [], ids: [], rewritten: [] }
+        const out = { cells: [], styles: [], sizes: [], ids: [], filters: [], rewritten: [] }
 
         const nextCells = new Map()
         for (const [k, cell] of cells) {
@@ -421,6 +444,14 @@ export function createEngine(initialRows = 50, initialCols = 50) {
             }
             for (let i = 0; i < rows; i++) if (next[i] === undefined) next[i] = nextRowId++
             rowIds = next
+        } else {
+            const next = new Map()
+            for (const [c, f] of filters) {
+                const nc = map(c)
+                if (nc < 0) out.filters.push([c, f])
+                else next.set(nc, f)
+            }
+            filters = next
         }
         pending.full = true
         return out
@@ -432,6 +463,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         for (const [k, s] of removed.styles) styles.set(k, s)
         for (const [i, s] of removed.sizes) (isRow ? rowHeights : colWidths).set(i, s)
         for (const [i, id] of removed.ids) rowIds[i] = id
+        for (const [c, f] of removed.filters) filters.set(c, f)
         for (const [nk, raw] of removed.rewritten) {
             const r = rowOf(nk), c = colOf(nk)
             const ok = isRow ? keyOf(inverse(r), c) : keyOf(r, inverse(c))
@@ -461,8 +493,13 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         apply()
     }
 
+    function setSortState(next) {
+        setLogged('sort', () => sortState, (v) => { sortState = v }, next)
+    }
+
     function insertRows(at, n = 1) {
         return transact('Insert row', () => {
+            setSortState(null)
             structural('row', (i) => (i >= at ? i + n : i),
                 (i) => (i < at ? i : i < at + n ? -1 : i - n), shiftPolicy('row', at, n), n)
         }).changed
@@ -470,6 +507,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
 
     function deleteRows(at, n = 1) {
         return transact('Delete row', () => {
+            setSortState(null)
             structural('row', (i) => (i < at ? i : i < at + n ? -1 : i - n),
                 (i) => (i < at ? i : i + n), deletePolicy('row', at, n), -n)
         }).changed
@@ -477,6 +515,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
 
     function insertCols(at, n = 1) {
         return transact('Insert column', () => {
+            setSortState(null)
             structural('col', (i) => (i >= at ? i + n : i),
                 (i) => (i < at ? i : i < at + n ? -1 : i - n), shiftPolicy('col', at, n), n)
         }).changed
@@ -484,6 +523,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
 
     function deleteCols(at, n = 1) {
         return transact('Delete column', () => {
+            setSortState(null)
             structural('col', (i) => (i < at ? i : i < at + n ? -1 : i - n),
                 (i) => (i < at ? i : i + n), deletePolicy('col', at, n), -n)
         }).changed
@@ -540,6 +580,16 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         return usedCache || null
     }
 
+    // A row holding only formulas (say a filled =J21/G21 helper column) has no
+    // data of its own, so for sorting it is as blank as a truly empty row.
+    function rowIsEmpty(r, c1, c2) {
+        for (let c = c1; c <= c2; c++) {
+            const cell = cells.get(keyOf(r, c))
+            if (cell && !cell.ast && !isBlank(cell.raw)) return false
+        }
+        return true
+    }
+
     // ── Editing ──
 
     function setCell(r, c, raw) {
@@ -570,7 +620,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         }).changed
     }
 
-    /** Remove every value, style, size and freeze. One undo step. */
+    /** Remove every value, style, size, filter and freeze. One undo step. */
     function clearAll() {
         return transact('Clear all', () => {
             for (const k of [...cells.keys()]) setRaw(k, '')
@@ -578,7 +628,9 @@ export function createEngine(initialRows = 50, initialCols = 50) {
             setLogged('sizes', () => [[...rowHeights], [...colWidths]], (v) => {
                 rowHeights = new Map(v[0]); colWidths = new Map(v[1])
             }, [[], []])
+            setLogged('filters', () => [...filters], (v) => { filters = new Map(v) }, [])
             setLogged('freeze', () => frozen, (v) => { frozen = v }, { rows: 0, cols: 0 })
+            setSortState(null)
         }).changed
     }
 
@@ -713,6 +765,128 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         }).changed
     }
 
+    // ── Filters ──
+
+    /** Data rows a filter or sort covers: below the header to the last used row. */
+    function dataRows() {
+        const used = usedRange()
+        return used ? { top: 1, bottom: used.r2, c2: used.c2 } : null
+    }
+
+    function computeHidden() {
+        const hidden = new Set()
+        const d = dataRows()
+        if (!filters.size || !d) return hidden
+        for (let r = d.top; r <= d.bottom; r++) {
+            if (!rowPasses(filters, (c) => valueAt(r, c))) hidden.add(r)
+        }
+        return hidden
+    }
+
+    function hiddenRows() {
+        if (!hiddenCache) hiddenCache = computeHidden()
+        return hiddenCache
+    }
+
+    function setFilter(col, spec) {
+        return transact('Filter', () => {
+            const next = new Map(filters)
+            if (spec) next.set(col, spec)
+            else next.delete(col)
+            setLogged('filters', () => [...filters], (v) => { filters = new Map(v) }, [...next])
+        }).changed
+    }
+
+    function clearFilters() {
+        return transact('Clear filters', () => {
+            setLogged('filters', () => [...filters], (v) => { filters = new Map(v) }, [])
+        }).changed
+    }
+
+    /** Distinct values of a column over the rows that pass the other columns' filters. */
+    function distinctValues(col) {
+        const d = dataRows()
+        const seen = new Map()
+        if (!d) return []
+        const others = new Map(filters)
+        others.delete(col)
+        for (let r = d.top; r <= d.bottom; r++) {
+            if (others.size && !rowPasses(others, (c) => valueAt(r, c))) continue
+            const text = generalText(valueAt(r, col))
+            const key = text.trim().toLowerCase()
+            const entry = seen.get(key)
+            if (entry) entry.count++
+            else seen.set(key, { key, label: key === '' ? '(Blanks)' : text.trim(), count: 1 })
+        }
+        return [...seen.values()].sort((a, b) =>
+            a.key === '' ? 1 : b.key === '' ? -1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+    }
+
+    function filterStats() {
+        const d = dataRows()
+        const total = d ? d.bottom - d.top + 1 : 0
+        return { total, visible: total - hiddenRows().size }
+    }
+
+    // ── Sort ──
+
+    /**
+     * Sort a block of rows by one column. dir: 'asc' | 'desc' | 'original'.
+     * Without a range: the used range, row 1 as header, a trailing totals
+     * row pinned. With a filter active only visible rows move. Whole rows
+     * move, so row identity, styles and heights travel with their data.
+     * One undo step; returns false when the order would not change.
+     */
+    function sort({ col, dir, range }) {
+        const d = dataRows()
+        if (!d && !range) return false
+        let top, bottom
+        if (range && range.r2 > range.r1) {
+            top = range.r1; bottom = range.r2
+        } else {
+            top = d.top; bottom = d.bottom
+            if (bottom >= top && isTotalsRow((c) => getText(bottom, c), d.c2)) bottom--
+        }
+        if (bottom <= top) return false
+
+        const hidden = hiddenRows()
+        const positions = []
+        for (let r = top; r <= bottom; r++) if (!hidden.has(r)) positions.push(r)
+        const blockId = `${top}:${bottom}`
+        const base = sortState && sortState.blockId === blockId
+            ? sortState.originalIds
+            : positions.map(r => rowIds[r])
+
+        let order
+        if (dir === 'original') {
+            const rank = new Map(base.map((id, i) => [id, i]))
+            order = positions.slice().sort((a, b) =>
+                (rank.get(rowIds[a]) ?? Infinity) - (rank.get(rowIds[b]) ?? Infinity) || a - b)
+        } else {
+            const used = usedRange()
+            const lastCol = used ? used.c2 : col
+            const keys = new Map()
+            for (const r of positions) keys.set(r, sortKey(valueAt(r, col), rowIsEmpty(r, 0, lastCol)))
+            const sign = dir === 'desc' ? -1 : 1
+            order = positions.slice().sort((a, b) => compareKeys(keys.get(a), keys.get(b), sign) || a - b)
+        }
+
+        const perm = new Map()
+        const inv = new Map()
+        for (let i = 0; i < positions.length; i++) {
+            if (order[i] !== positions[i]) {
+                perm.set(order[i], positions[i])
+                inv.set(positions[i], order[i])
+            }
+        }
+        const nextState = dir === 'original' ? null : { blockId, col, dir, originalIds: base }
+        return transact('Sort', () => {
+            setSortState(nextState)
+            if (!perm.size) return
+            structural('row', (i) => perm.get(i) ?? i, (i) => inv.get(i) ?? i, permutePolicy(perm, top, bottom), 0)
+        }).changed
+    }
+
     // ── Capacity ──
 
     function ensureCapacity(minRows, minCols) {
@@ -731,7 +905,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         usedRange, rowId: (r) => rowIds[r],
 
         // editing (each call is one undo step)
-        setCell, setValues, clearRange, clearAll, applyStyle, fill,
+        setCell, setValues, clearRange, clearAll, applyStyle, fill, sort,
         insertRow: (at) => insertRows(at, 1),
         deleteRow: (at) => deleteRows(at, 1),
         insertColumn: (at) => insertCols(at, 1),
@@ -744,6 +918,13 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         get frozenRows() { return frozen.rows },
         get frozenCols() { return frozen.cols },
         setFreeze,
+
+        // filters
+        setFilter, clearFilters, distinctValues, filterStats,
+        getFilter: (c) => filters.get(c) || null,
+        get filteredColumns() { return [...filters.keys()] },
+        isRowHidden: (r) => hiddenRows().has(r),
+        get sortState() { return sortState },
 
         // undo
         undo, redo,
