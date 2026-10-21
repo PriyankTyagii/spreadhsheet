@@ -29,6 +29,21 @@ export function loadLarge(rows = 100000, cols = 200) {
     return engine
 }
 
+/** 10,000 data rows built from the large fixture, plus a K = J/G formula column. */
+function tenThousandRows() {
+    const src = parseTsv(salesLarge)
+    const header = src[0]
+    const body = src.slice(1, -1)
+    const data = [[...header, 'Per unit']]
+    for (let i = 0; data.length <= 10000; i++) {
+        const row = body[i % body.length]
+        data.push([...row, `=J${data.length + 1}/G${data.length + 1}`])
+    }
+    const e = createEngine(10100, 20)
+    e.setValues(0, 0, data)
+    return e
+}
+
 export const BENCHMARKS = [
     {
         id: 'fill-5000',
@@ -39,6 +54,18 @@ export const BENCHMARKS = [
             e.setValues(0, 0, [['ORD-0001', '1', '2024-01-15', 'Mon', '=B1*2'], ['ORD-0002', '2', '2024-01-16', 'Tue', '=B2*2']])
             return e
         }, (e) => e.fill({ r1: 0, c1: 0, r2: 1, c2: 4 }, { r1: 0, c1: 0, r2: 1001, c2: 4 })),
+    },
+    {
+        id: 'sort-10k',
+        label: 'Sort 10,000 rows by Total descending (11 columns incl. 10,000 formulas that follow their rows)',
+        budget: 300,
+        run: () => time(5, tenThousandRows, (e) => e.sort({ col: 9, dir: 'desc' })),
+    },
+    {
+        id: 'sort-large-date',
+        label: 'sales-large.tsv: sort by Date ascending (2,990 rows, three date formats)',
+        budget: 300,
+        run: () => time(5, () => loadLarge(5000, 30), (e) => e.sort({ col: 1, dir: 'asc' })),
     },
 ]
 

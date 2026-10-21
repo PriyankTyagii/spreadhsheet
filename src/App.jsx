@@ -8,6 +8,7 @@ import Toolbar from './grid/Toolbar.jsx'
 import FormulaBar from './grid/FormulaBar.jsx'
 import FilterMenu from './grid/FilterMenu.jsx'
 import { createEditorStore } from './grid/editorStore.js'
+import { timed } from './perf.js'
 import { cellSelection, selectionRect, effectiveRect, extendTo, isSingleCell } from './grid/selection.js'
 
 const TOTAL_ROWS = 100000
@@ -130,7 +131,7 @@ export default function App() {
             const dir = s && s.col === c ? (s.dir === 'asc' ? 'desc' : 'original') : 'asc'
             const g = selectionRect(selection, rows, cols)
             const range = selection.kind === 'cells' && g.r2 > g.r1 && c >= g.c1 && c <= g.c2 ? g : null
-            engine.sort({ col: c, dir, range })
+            timed('sort', () => engine.sort({ col: c, dir, range }))
         },
         clearFilters: () => engine.clearFilters(),
         loadSmall: () => commands.loadSample(loadSampleSmall),
@@ -228,7 +229,7 @@ export default function App() {
                     onEditorKeyDown={onEditorKeyDown}
                     onCommitEdit={commitEdit}
                     onFill={(source, target) => {
-                        engine.fill(source, target)
+                        timed('fill', () => engine.fill(source, target))
                         select({ anchor: { r: target.r1, c: target.c1 }, focus: { r: target.r2, c: target.c2 }, kind: 'cells' }, false)
                     }}
                     onKeyDown={onGridKeyDown}
