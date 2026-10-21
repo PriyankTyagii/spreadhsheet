@@ -62,6 +62,9 @@ export default function App() {
     }
 
     function onEditorKeyDown(e) {
+        // The cell editor sits inside the grid; its keys must not also reach
+        // the grid handler (Enter would commit, then immediately re-open).
+        e.stopPropagation()
         const target = editor.getTarget()
         if (e.key === 'Enter') { e.preventDefault(); commitEdit(e.shiftKey ? 'up' : 'down') }
         else if (e.key === 'Tab') { e.preventDefault(); commitEdit(e.shiftKey ? 'left' : 'right') }
@@ -124,7 +127,7 @@ export default function App() {
     // ── keyboard (grid focused, not editing) ──
 
     function onGridKeyDown(e) {
-        if (editor.getTarget()) return
+        if (editor.getTarget() || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return
         const mod = e.ctrlKey || e.metaKey
         const key = e.key
         const lower = key.length === 1 ? key.toLowerCase() : key
