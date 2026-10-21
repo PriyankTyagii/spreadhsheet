@@ -32,14 +32,15 @@
 /* ── Grid ── */
 .grid-scroller { flex: 1; overflow: auto; position: relative; background: #fff; outline: none; overscroll-behavior: contain; }
 .grid-canvas { position: relative; }
-.pane-body { position: absolute; touch-action: none; }
 
-/* Zero-size sticky panes: they stay pinned while their content overflows. */
-.pane-top { position: sticky; top: 0; height: 0; z-index: 4; }
-.pane-left { position: sticky; left: 0; width: 0; height: 0; z-index: 3; }
-.pane-corner { position: sticky; top: 0; left: 0; width: 56px; height: 24px; margin-top: 0; z-index: 6; background: #f8f9fa; border-right: 1px solid #c0c0c0; border-bottom: 1px solid #c0c0c0; cursor: pointer; }
-.pane-top, .pane-left { pointer-events: none; }
-.pane-top > *, .pane-left > * { pointer-events: auto; }
+/* Layers: see the comment at the top of Grid.jsx. */
+.layer { overflow: hidden; }
+.layer-body { position: absolute; top: 0; left: 0; }
+.layer-top { position: sticky; top: 0; z-index: 5; background: #fff; }
+.layer-left { position: sticky; left: 0; z-index: 4; background: #fff; }
+.layer-corner { position: sticky; top: 0; left: 0; z-index: 6; background: #fff; }
+.layer-top, .layer-left { box-shadow: none; }
+.corner-box { position: absolute; left: 0; top: 0; width: 56px; height: 24px; background: #f8f9fa; border-right: 1px solid #c0c0c0; border-bottom: 1px solid #c0c0c0; cursor: pointer; }
 
 .col-header, .row-header {
   position: absolute; background: #f8f9fa; color: #5f6368; font-size: 12px; user-select: none;
@@ -48,15 +49,19 @@
 }
 .col-header { top: 0; height: 24px; }
 .row-header { left: 0; width: 56px; }
+.col-resize { position: absolute; right: -3px; top: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 2; }
+.row-resize { position: absolute; left: 0; bottom: -3px; height: 6px; width: 100%; cursor: row-resize; z-index: 2; }
+.resize-guide-v { position: absolute; top: 0; width: 2px; background: #1a73e8; z-index: 7; pointer-events: none; }
+.resize-guide-h { position: absolute; left: 0; height: 2px; background: #1a73e8; z-index: 7; pointer-events: none; }
 .col-header.in-selection, .row-header.in-selection { background: #e8eaed; color: #202124; font-weight: 600; }
 
+/* Cells are plain blocks with an explicit size; `contain: strict` lets the
+   browser lay out and paint each one in isolation while scrolling. */
 .cell {
-  position: absolute; padding: 0 5px; overflow: hidden; white-space: nowrap; text-overflow: clip;
-  border-right: 1px solid #e2e3e3; border-bottom: 1px solid #e2e3e3; line-height: 1; display: flex; align-items: center;
-  cursor: cell; user-select: none;
+  position: absolute; display: block; padding: 0 5px; overflow: hidden; white-space: nowrap;
+  border-right: 1px solid #e2e3e3; border-bottom: 1px solid #e2e3e3;
+  cursor: cell; user-select: none; contain: strict;
 }
-.cell[style*="text-align: center"] { justify-content: center; }
-.cell[style*="text-align: right"] { justify-content: flex-end; }
 .cell.error { color: #d93025 !important; }
 
 .selection-box { position: absolute; background: rgba(26, 115, 232, 0.08); border: 1px solid #1a73e8; pointer-events: none; }
@@ -97,3 +102,5 @@
 .filter-condition { display: flex; flex-direction: column; gap: 6px; }
 .filter-footer { display: flex; justify-content: flex-end; gap: 6px; }
 .status-filter { color: #1a73e8; font-weight: 600; }
+.name-box.invalid { outline: 2px solid #d93025; outline-offset: -1px; }
+.react-stats { font-family: ui-monospace, Menlo, monospace; color: #202124; }
