@@ -5,6 +5,7 @@
 - **Challenge 1: range selection and fill handle.** Selection model in `src/grid/selection.js`, series detection in `src/engine/fill.js`, `engine.fill()` in `src/engine/core.js`. All four acceptance checks are covered by tests in `src/engine/fill.test.js` (run against the real `fixtures/sales.tsv`).
 - **Challenge 2: sort and filter.** `engine.sort()` / `engine.setFilter()` in `src/engine/core.js`, comparison in `src/engine/sort.js`, predicates in `src/engine/filter.js`, dropdown in `src/grid/FilterMenu.jsx`. Acceptance checks are in `src/engine/sort.test.js`; I also ran them through the UI in Chrome.
 - **Challenge 3: virtualized grid at scale.** `src/grid/Grid.jsx` (layers, windowing, resize, frozen panes), `src/grid/axis.js` (prefix sums + binary search), name box in `src/grid/FormulaBar.jsx`, keyboard handling in `src/App.jsx`. The sheet is 100,000 × 200.
+- **Challenge 5: format with AI.** `src/ai/formatApplier.js` (pure planner and preview text), `engine.applyFormat` (one transaction), and the format card in `AiPanel.jsx`. Golden cases are in `src/ai/formatApplier.test.js`; each also checks that one undo restores every style, width and freeze exactly.
 - **Challenge 4: ask your data.** `src/ai/`: `parse.js` (JSON extraction), `validate.js` (schema validator), `actions.js` (guard), `executor.js`, `context.js`, `prompt.js`, `assistant.js`, `provider.js`, and the panel `AiPanel.jsx` (Ctrl+K). All 20 golden queries pass in `src/ai/executor.test.js`, both from the plan and through the mock provider's wrapped text.
 
 ## Data model changes
@@ -47,6 +48,8 @@ Every method below that mutates is exactly one undo step. "No-op" means nothing 
 | `getFilter(col)`, `filteredColumns`, `isRowHidden(r)`, `filterStats()` → `{ visible, total }` | Filter state for the UI. |
 | `distinctValues(col)` → `[{ key, label, count }]` | Checklist entries over the rows that pass the *other* columns' filters. |
 | `sortState` | Current sort column/direction (header arrow). |
+| `applyFormat(plan, measure)` | Applies a planned `format_sheet`: complete style patches per cell, widths, freeze, then auto-fit measured with the new styles. One undo step; returns `false` and records nothing when nothing changed (NO_CHANGES). |
+| `getStylePatch(r, c)` | The cell's own style overrides, or `null`. |
 | `fitWidth(c, measure)`, `autoFitColumn(c, measure)` | Width that fits the widest displayed text in the column, clamped to 40–600 px. `measure(text, style)` is injected by the UI (canvas `measureText`), so the engine stays DOM-free. |
 | `lastRecalcCount` | Number of formulas the last change re-evaluated. Tests use it to prove incremental recalculation. |
 | `transact(label, fn)` | Runs `fn` as one undo step. Nested calls join the outer one. If `fn` throws, everything it did is rolled back. |
@@ -72,6 +75,7 @@ Structural edits (insert/delete row/column, and sort later) are a remap of indic
 | Resize a column/row (drag), auto-fit (double-click the border) | That size. Resizing one of several selected columns resizes all of them in one step. |
 | Freeze row 1 / Freeze col A toggles | The freeze change. |
 | AI: Insert into sheet | Every inserted cell. |
+| AI: Apply a format | Every style, width, freeze and auto-fit change of that action. NO_CHANGES and OUT_OF_RANGE create no entry. |
 | Load sample | The whole load (previous sheet comes back). |
 | Clear all | Everything it cleared. |
 
@@ -135,9 +139,9 @@ Method: `npm run build && npm run preview`, then open `/?bench` in Chrome. The p
 | Sort 10,000 rows < 300 ms | 10,000 rows × 11 columns built from the large fixture, including a `=J/G` formula per row that is rewritten as its row moves; sort by Total descending, including full recalculation | 123 ms |
 | sales-large.tsv, sort by Date | 2,990 rows, engine only | 12.8 ms |
 | same, in the UI | Click on the header button until the frame is painted (`sort → paint` user-timing measure, 3 runs) | 28–62 ms (engine 11–37 ms) |
-
 | Any golden plan over sales-large < 50 ms | Executor per plan, median of 5; the slowest plan reported (`query-golden-slowest`) | 6.3 ms (snapshotting the sheet adds 1.2 ms) |
 | Two-level group-by over 100,000 rows < 500 ms | Region × Category with sum/avg/count over generated messy rows | 76 ms |
+| AI format on sales-large < 300 ms | "Format this as a clean table" (f01 action) applied in the UI, including auto-fit measuring every used cell; `ai format` user-timing measure | 64 ms |
 
 Grid budgets. Measured on the production build in Chrome 155, driven headlessly by Playwright. Headless Chrome caps animation frames at 30 fps, so frame-time runs use `--disable-frame-rate-limit --disable-gpu-vsync`: each frame then takes exactly as long as its work, and a frame under 16.7 ms means 60 fps is achievable. Headless rasterizes on the CPU, so paint numbers are pessimistic compared with a normal GPU-backed window. Sheet for the scroll and typing runs: sales-large plus `K2:K100000 = J*2` (about 130,000 filled cells).
 
@@ -187,6 +191,13 @@ Types are inferred from up to 200 values per column: percent, currency, date, id
 **Executor notes.** Row results are raw cell text; numbers in results are rounded to 2 decimals. `limit` is capped at 500 in code whatever the plan says. A descending sort reverses the whole comparison (contract §3.5 does not pin blanks), unlike the grid sort, which keeps blanks last.
 
 **Insert into sheet** writes the header plus rows at the chosen cell with `setValues`, one undo step. **Re-run** re-executes the stored plan on the current sheet with no model call.
+
+**Format with AI.** The model returns `format_sheet`. After validation, `planFormat(view, action)` builds the ops in the contract's order: clearFormatting, body, columns, totals, then header last. The header is never number-formatted; column indices outside the used range are ignored; widths outside 30–600 are ignored; and a `freezeRows` that would freeze every used row is refused with OUT_OF_RANGE before anything else. The totals row is the last used row when its first filled cell matches the totals regex, or when it reads as a summary line. The card shows a plain-words preview built from the action and the sheet (it says when no totals row was found). Apply re-plans against the current sheet and calls `engine.applyFormat`; Discard does nothing. Number formats change only the display (`src/engine/numberFormat.js`); the stored value is never rewritten.
+
+**Where the golden set disagrees with the contract, and what I did:**
+- **f10** ("Bold the totals row" → NO_CHANGES, "the last row is not a totals row"). Row 33 of sales.tsv reads `Total`, which §3.1 and §4.2 define as a totals row, and f09 relies on exactly that. The contract wins, so the row is bolded (one undo step). It would be NO_CHANGES only if the row were already bold.
+- **f03** checks that "J22 stays blank", but J22 is ORD-1020's `$3,344.00`; the blank Total is J23 (ORD-1021). The test checks J23.
+- **f06** ("Remove all formatting", 1 undo step) and **f04** ("Unfreeze", 1 step "only if something was frozen before") both assume earlier state. On a freshly loaded sheet they are NO_CHANGES per §4.7, so the tests format/freeze first.
 
 ## Trade-offs and what I would do next
 

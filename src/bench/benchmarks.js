@@ -9,6 +9,9 @@ import salesLarge from '../../fixtures/sales-large.tsv?raw'
 import queries from '../../fixtures/ai-eval/queries.json'
 import { readTable } from '../ai/table.js'
 import { executeQuery } from '../ai/executor.js'
+import formats from '../../fixtures/ai-eval/format-prompts.json'
+import { planFormat } from '../ai/formatApplier.js'
+import { formatView } from '../ai/table.js'
 
 function median(xs) {
     const s = [...xs].sort((a, b) => a - b)
@@ -146,6 +149,13 @@ BENCHMARKS.push(
         },
     },
 )
+
+BENCHMARKS.push({
+    id: 'format-large',
+    label: 'Plan + apply "Format this as a clean table" on sales-large (no auto-fit: it needs a canvas; see the UI measure)',
+    budget: 300,
+    run: () => time(5, () => loadLarge(5000, 30), (e) => e.applyFormat(planFormat(formatView(e), formats.cases[0].action))),
+})
 
 export function runAll(list = BENCHMARKS) {
     return list.map(b => {
