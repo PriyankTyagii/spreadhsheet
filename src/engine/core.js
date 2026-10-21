@@ -111,6 +111,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
     let version = 0
     const listeners = new Set()
 
+    let lastRecalcCount = 0
     let usedCache = null
     let hiddenCache = null
 
@@ -215,11 +216,12 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         const queue = []
         for (const [k, n] of indegree) if (n === 0) queue.push(k)
         let done = 0
+        let evaluated = 0
         for (let i = 0; i < queue.length; i++) {
             const k = queue[i]
             done++
             const cell = cells.get(k)
-            if (cell && cell.ast) cell.value = evaluate(cell.ast, evalCtx)
+            if (cell && cell.ast) { cell.value = evaluate(cell.ast, evalCtx); evaluated++ }
             for (const d of downstream.get(k)) {
                 const n = indegree.get(d) - 1
                 indegree.set(d, n)
@@ -228,9 +230,10 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         }
         if (done < dirty.size) {
             for (const [k, n] of indegree) {
-                if (n > 0) { const cell = cells.get(k); if (cell && cell.ast) cell.value = ERR.CYCLE }
+                if (n > 0) { const cell = cells.get(k); if (cell && cell.ast) { cell.value = ERR.CYCLE; evaluated++ } }
             }
         }
+        lastRecalcCount = evaluated
     }
 
     // ── Primitive writes (unlogged; transactions log around them) ──
@@ -547,9 +550,15 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         return { raw: cell.raw, computed: cell.value, error: null }
     }
 
+    // Merged styles are cached per patch object, so the same patch always
+    // yields the same object and memoized cells can compare by identity.
+    const mergedStyles = new WeakMap()
     function getStyle(r, c) {
         const s = styles.get(keyOf(r, c))
-        return s ? { ...DEFAULT_STYLE, ...s } : DEFAULT_STYLE
+        if (!s) return DEFAULT_STYLE
+        let m = mergedStyles.get(s)
+        if (!m) mergedStyles.set(s, (m = Object.freeze({ ...DEFAULT_STYLE, ...s })))
+        return m
     }
 
     /** The text the grid shows: computed value through the number format. */
@@ -931,6 +940,8 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         canUndo: () => undoStack.length > 0,
         canRedo: () => redoStack.length > 0,
         get undoDepth() { return undoStack.length },
+        /** How many formulas the last change re-evaluated (for tests and benchmarks). */
+        get lastRecalcCount() { return lastRecalcCount },
 
         ensureCapacity,
     }

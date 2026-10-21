@@ -169,3 +169,17 @@ describe('undo of non-cell state', () => {
         expect(engine.frozenRows).toBe(0)
     })
 })
+
+describe('incremental recalculation', () => {
+    it('an edit re-evaluates only the formulas that depend on it', () => {
+        const engine = createEngine(20010, 3)
+        const data = []
+        for (let i = 0; i < 20000; i++) data.push([String(i), `=A${i + 1}*2`])
+        engine.setValues(0, 0, data)
+        engine.setCell(0, 2, '=SUM(B1:B20000)')
+        engine.setCell(9000, 0, '1')
+        // B9001 and the SUM over column B; the other 19,999 formulas untouched
+        expect(engine.lastRecalcCount).toBe(2)
+        expect(engine.getValue(9000, 1)).toBe(2)
+    })
+})
