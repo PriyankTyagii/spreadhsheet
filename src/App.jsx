@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import './App.css'
 import { createEngine } from './engine/core.js'
 import { cellName, rangeName, parseRangeName } from './engine/refs.js'
@@ -7,6 +7,7 @@ import Grid from './grid/Grid.jsx'
 import Toolbar from './grid/Toolbar.jsx'
 import FormulaBar from './grid/FormulaBar.jsx'
 import FilterMenu from './grid/FilterMenu.jsx'
+import AiPanel from './ai/AiPanel.jsx'
 import { createEditorStore } from './grid/editorStore.js'
 import { timed } from './perf.js'
 import { measureText } from './grid/measure.js'
@@ -24,6 +25,19 @@ export default function App() {
     const version = useSyncExternalStore(engine.subscribe, () => engine.version)
     const [selection, setSelection] = useState(() => cellSelection(0, 0))
     const [filterMenu, setFilterMenu] = useState(null)
+    const [aiOpen, setAiOpen] = useState(false)
+
+    // Ctrl+K toggles the AI panel from anywhere, including text inputs.
+    useEffect(() => {
+        const onKey = (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault()
+                setAiOpen(open => !open)
+            }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [])
     const gridApi = useRef(null)
 
     const { rows, cols } = engine
@@ -289,6 +303,7 @@ export default function App() {
                     onKeyDown={onEditorKeyDown}
                     onCommit={commitEdit}
                 />
+                <div className="workspace">
                 <Grid
                     engine={engine}
                     version={version}
@@ -310,6 +325,15 @@ export default function App() {
                     onOpenFilter={(c, box) => setFilterMenu({ col: c, x: box.left, y: box.bottom + 4 })}
                     apiRef={gridApi}
                 />
+                    {aiOpen && (
+                        <AiPanel
+                            engine={engine}
+                            selectionRect={isSingleCell(selection) ? null : selectionRect(selection, rows, cols)}
+                            activeCell={active}
+                            onClose={() => { setAiOpen(false); gridApi.current?.focus() }}
+                        />
+                    )}
+                </div>
                 {filterMenu && (
                     <FilterMenu
                         key={filterMenu.col}
@@ -337,7 +361,7 @@ function StatusBar({ engine, onClearFilters }) {
                     <button className="link-btn" onClick={onClearFilters}>Clear all filters</button>
                 </>
             ) : (
-                <span>Click to select · double-click, Enter, F2 or type to edit · drag the corner square to fill · Ctrl+D / Ctrl+R fill down / right</span>
+                <span>Ctrl+K: ask AI · Click to select · double-click, Enter, F2 or type to edit · drag the corner square to fill · Ctrl+D / Ctrl+R fill down / right</span>
             )}
             <span className="spacer" />
             {PROFILE && <span id="react-stats" className="react-stats" />}
