@@ -6,6 +6,7 @@ import { loadSampleSmall, loadSampleLarge } from './fixtures/loadSample.js'
 import Grid from './grid/Grid.jsx'
 import Toolbar from './grid/Toolbar.jsx'
 import FormulaBar from './grid/FormulaBar.jsx'
+import FilterMenu from './grid/FilterMenu.jsx'
 import { createEditorStore } from './grid/editorStore.js'
 import { cellSelection, selectionRect, effectiveRect, extendTo, isSingleCell } from './grid/selection.js'
 
@@ -19,6 +20,7 @@ export default function App() {
     const [editor] = useState(createEditorStore)
     const version = useSyncExternalStore(engine.subscribe, () => engine.version)
     const [selection, setSelection] = useState(() => cellSelection(0, 0))
+    const [filterMenu, setFilterMenu] = useState(null)
     const gridApi = useRef(null)
 
     const { rows, cols } = engine
@@ -120,6 +122,17 @@ export default function App() {
             engine.transact('Load sample', () => { engine.clearAll(); loader(engine) })
             select(cellSelection(0, 0))
         },
+        // Header sort button: ascending → descending → original order. A
+        // multi-row selection that contains the column is the block to sort;
+        // otherwise the used range below the header row.
+        sort: (c) => {
+            const s = engine.sortState
+            const dir = s && s.col === c ? (s.dir === 'asc' ? 'desc' : 'original') : 'asc'
+            const g = selectionRect(selection, rows, cols)
+            const range = selection.kind === 'cells' && g.r2 > g.r1 && c >= g.c1 && c <= g.c2 ? g : null
+            engine.sort({ col: c, dir, range })
+        },
+        clearFilters: () => engine.clearFilters(),
         loadSmall: () => commands.loadSample(loadSampleSmall),
         loadLarge: () => commands.loadSample(loadSampleLarge),
     }
@@ -219,12 +232,39 @@ export default function App() {
                         select({ anchor: { r: target.r1, c: target.c1 }, focus: { r: target.r2, c: target.c2 }, kind: 'cells' }, false)
                     }}
                     onKeyDown={onGridKeyDown}
+                    onSort={(c) => { commands.sort(c); gridApi.current?.focus() }}
+                    onOpenFilter={(c, box) => setFilterMenu({ col: c, x: box.left, y: box.bottom + 4 })}
                     apiRef={gridApi}
                 />
-                <div className="status-bar">
-                    <span>Click to select · double-click, Enter, F2 or type to edit · drag the corner square to fill · Ctrl+D / Ctrl+R fill down / right</span>
-                </div>
+                {filterMenu && (
+                    <FilterMenu
+                        key={filterMenu.col}
+                        engine={engine}
+                        col={filterMenu.col}
+                        x={filterMenu.x}
+                        y={filterMenu.y}
+                        onClose={() => { setFilterMenu(null); gridApi.current?.focus() }}
+                    />
+                )}
+                <StatusBar engine={engine} onClearFilters={commands.clearFilters} />
             </div>
+        </div>
+    )
+}
+
+function StatusBar({ engine, onClearFilters }) {
+    const filtered = engine.filteredColumns.length > 0
+    const stats = filtered ? engine.filterStats() : null
+    return (
+        <div className="status-bar">
+            {filtered ? (
+                <>
+                    <span className="status-filter">{stats.visible} of {stats.total} rows</span>
+                    <button className="link-btn" onClick={onClearFilters}>Clear all filters</button>
+                </>
+            ) : (
+                <span>Click to select · double-click, Enter, F2 or type to edit · drag the corner square to fill · Ctrl+D / Ctrl+R fill down / right</span>
+            )}
         </div>
     )
 }

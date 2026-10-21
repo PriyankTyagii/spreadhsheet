@@ -57,7 +57,7 @@ function CellEditor({ editor, x, y, width, height, style, autoFocus, onKeyDown, 
 
 export default function Grid({
     engine, version, selection, onSelectionChange, editor, onStartEdit, onEditorKeyDown,
-    onCommitEdit, onFill, onKeyDown, apiRef,
+    onCommitEdit, onFill, onKeyDown, onSort, onOpenFilter, apiRef,
 }) {
     const scrollerRef = useRef(null)
     const bodyRef = useRef(null)
@@ -127,6 +127,8 @@ export default function Grid({
     for (let c = c0; c <= c1; c++) visibleCols.push(c)
 
     const sel = selectionRect(selection, rows, cols)
+    const used = engine.usedRange()
+    const sortState = engine.sortState
 
     // ── pointer handling ──
     function cellAt(clientX, clientY) {
@@ -228,6 +230,8 @@ export default function Grid({
             cellsOut.push(
                 <div
                     key={r * 16384 + c}
+                    data-r={r}
+                    data-c={c}
                     className={isError ? 'cell error' : 'cell'}
                     style={{ left: colAxis.start(c), top: y, width: colAxis.size(c), height: h, ...cellCss(style) }}
                 >
@@ -258,14 +262,37 @@ export default function Grid({
                 <div className="pane-top">
                     {visibleCols.map(c => {
                         const inSel = c >= sel.c1 && c <= sel.c2
+                        const inData = used && c <= used.c2
+                        const filtered = !!engine.getFilter(c)
+                        const sortDir = sortState && sortState.col === c ? sortState.dir : null
                         return (
                             <div
                                 key={c}
-                                className={`col-header${inSel ? ' in-selection' : ''}`}
+                                className={`col-header${inSel ? ' in-selection' : ''}${filtered ? ' filtered' : ''}`}
                                 style={{ left: HEADER_W + colAxis.start(c), width: colAxis.size(c) }}
                                 onPointerDown={(e) => onColHeaderPointerDown(e, c)}
                             >
-                                {colToLetters(c)}
+                                <span className="col-label">{colToLetters(c)}</span>
+                                {inData && (
+                                    <span className="header-tools" onPointerDown={(e) => e.stopPropagation()}>
+                                        <button
+                                            className={`header-btn${sortDir ? ' on' : ''}`}
+                                            title={sortDir === 'asc' ? 'Sorted ascending: click for descending'
+                                                : sortDir === 'desc' ? 'Sorted descending: click for original order'
+                                                    : 'Sort ascending'}
+                                            onClick={() => onSort(c)}
+                                        >
+                                            {sortDir === 'asc' ? '\u2191' : sortDir === 'desc' ? '\u2193' : '\u21C5'}
+                                        </button>
+                                        <button
+                                            className={`header-btn${filtered ? ' on' : ''}`}
+                                            title="Filter"
+                                            onClick={(e) => onOpenFilter(c, e.currentTarget.getBoundingClientRect())}
+                                        >
+                                            {'\u25BE'}
+                                        </button>
+                                    </span>
+                                )}
                             </div>
                         )
                     })}

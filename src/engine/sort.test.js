@@ -109,6 +109,19 @@ describe('filter', () => {
         expect(x.raw('A29')).toBe('ORD-1027')
     })
 
+    it('undo and redo of a filter refresh the hidden rows and the version', () => {
+        const e = createEngine(10, 3)
+        e.setValues(0, 0, [['k'], ['1'], ['2']])
+        e.setFilter(0, { values: ['1'], condition: null })
+        expect(e.isRowHidden(2)).toBe(true) // reads (and caches) the hidden set
+        const v = e.version
+        e.undo()
+        expect(e.version).toBeGreaterThan(v)
+        expect(e.isRowHidden(2)).toBe(false)
+        e.redo()
+        expect(e.isRowHidden(2)).toBe(true)
+    })
+
     it('hidden rows still count in formulas', () => {
         const e = createEngine(10, 3)
         e.setValues(0, 0, [['k'], ['1'], ['2'], ['3']])
