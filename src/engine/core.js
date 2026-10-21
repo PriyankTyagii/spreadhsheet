@@ -291,11 +291,14 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         }
     }
 
+    // Closure records (filters, freeze, sizes, sort state, structural edits)
+    // change state putRaw/putStyle don't see, so flag it for settle() to
+    // drop caches and bump the version.
     function revert(rec) {
         switch (rec.t) {
             case 'raw': putRaw(rec.k, rec.b); break
             case 'style': putStyle(rec.k, rec.b); break
-            case 'fn': rec.undo(); break
+            case 'fn': rec.undo(); pending.styled = true; break
         }
     }
 
@@ -303,7 +306,7 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         switch (rec.t) {
             case 'raw': putRaw(rec.k, rec.a); break
             case 'style': putStyle(rec.k, rec.a); break
-            case 'fn': rec.redo(); break
+            case 'fn': rec.redo(); pending.styled = true; break
         }
     }
 

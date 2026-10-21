@@ -155,3 +155,17 @@ describe('transactions', () => {
         expect(engine.getRaw(0, 0)).toBe('79')
     })
 })
+
+describe('undo of non-cell state', () => {
+    it('bumps the version so the UI re-renders (freeze, sizes)', () => {
+        const engine = createEngine(10, 10)
+        engine.setFreeze(1, 0)
+        engine.setColWidth(2, 300)
+        const v = engine.version
+        engine.undo()
+        expect(engine.version).toBeGreaterThan(v)
+        expect(engine.colWidth(2)).toBe(100)
+        engine.undo()
+        expect(engine.frozenRows).toBe(0)
+    })
+})
