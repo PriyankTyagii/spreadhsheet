@@ -6,11 +6,14 @@
 // ─────────────────────────────────────────────────────────────
 import { useEffect, useRef, useState } from 'react'
 import { ask } from './assistant.js'
-import { readTable } from './table.js'
+import { readTable, formatView } from './table.js'
+import { planFormat, describeFormat } from './formatApplier.js'
+import { measureText } from '../grid/measure.js'
+import { timed } from '../perf.js'
 import { executeQuery } from './executor.js'
 import { describeQuery } from './describe.js'
 import { createProvider } from './provider.js'
-import { cellName, parseCellName, rangeName } from '../engine/refs.js'
+import { cellName, parseCellName, rangeName, colToLetters } from '../engine/refs.js'
 
 const HISTORY_TURNS = 6
 
@@ -21,6 +24,7 @@ const ERROR_TITLES = {
     UNKNOWN_OP: 'Unknown filter operator',
     UNKNOWN_FN: 'Unknown aggregate function',
     UNKNOWN_SORT_COLUMN: 'The plan sorts by a column that is not in the result',
+    OUT_OF_RANGE: 'That is outside the table, so nothing was changed',
 }
 
 function runQuery(engine, action) {
@@ -28,6 +32,12 @@ function runQuery(engine, action) {
     const t0 = performance.now()
     const result = executeQuery(action, table)
     return { result, ms: performance.now() - t0, columns: table.header.filter(h => String(h).trim()) }
+}
+
+function applyTimed(engine, plan) {
+    const t0 = performance.now()
+    const changed = timed('ai format', () => engine.applyFormat(plan, measureText))
+    return { changed, ms: performance.now() - t0 }
 }
 
 /** Turn a validated action into a card. Pure apart from reading the sheet. */
@@ -41,7 +51,30 @@ function cardFor(engine, action) {
         if (result.error) return { type: 'error', action, error: result.error, detail: result.detail }
         return { type: 'query', action, result, ms }
     }
+    if (action.type === 'format_sheet') {
+        const plan = planFormat(formatView(engine), action)
+        if (plan.error) return { type: 'error', action, error: plan.error, detail: plan.detail }
+        return { type: 'format', action, preview: describeFormat(action, plan.totalsRow !== null, colToLetters), status: 'pending' }
+    }
     return { type: 'unsupported', action }
+}
+
+function FormatCard({ card, onApply, onDiscard }) {
+    return (
+        <>
+            <p className="ai-desc">{card.preview}</p>
+            {card.status === 'pending' && (
+                <div className="ai-actions">
+                    <button className="toolbar-btn primary" onClick={onApply}>Apply</button>
+                    <button className="toolbar-btn" onClick={onDiscard}>Discard</button>
+                </div>
+            )}
+            {card.status === 'applied' && <p className="ai-ok-text">Applied in {card.ms.toFixed(0)} ms. Ctrl+Z undoes it in one step.</p>}
+            {card.status === 'NO_CHANGES' && <p className="ai-meta">NO_CHANGES: the sheet already looks like that; nothing was recorded.</p>}
+            {card.status === 'OUT_OF_RANGE' && <p className="ai-error-text">OUT_OF_RANGE: {card.detail}. Nothing was changed.</p>}
+            {card.status === 'discarded' && <p className="ai-meta">Discarded.</p>}
+        </>
+    )
 }
 
 function ResultTable({ result }) {
@@ -96,13 +129,15 @@ function QueryCard({ card, engine, activeCell, onRerun, onInsert }) {
     )
 }
 
-function Card({ item, engine, activeCell, onRerun, onInsert, onUseColumn }) {
+function Card({ item, engine, activeCell, onRerun, onInsert, onUseColumn, onApply, onDiscard }) {
     const [showPlan, setShowPlan] = useState(false)
     const card = item.card
     let body
     if (!card) body = <p className="ai-pending">Thinking…</p>
     else if (card.type === 'query') {
         body = <QueryCard card={card} engine={engine} activeCell={activeCell} onRerun={onRerun} onInsert={onInsert} />
+    } else if (card.type === 'format') {
+        body = <FormatCard card={card} onApply={onApply} onDiscard={onDiscard} />
     } else if (card.type === 'clarify') {
         body = <p className="ai-question">{card.question}</p>
     } else if (card.type === 'unknown-column') {
@@ -184,6 +219,14 @@ export default function AiPanel({ engine, selectionRect, activeCell, onClose }) 
         inputRef.current?.focus()
     }
 
+    // Re-plan against the sheet as it is now, then apply in one transaction.
+    function applyFormat(item) {
+        const plan = planFormat(formatView(engine), item.card.action)
+        if (plan.error) { update(item.id, { ...item.card, status: plan.error, detail: plan.detail }); return }
+        const { changed, ms } = applyTimed(engine, plan)
+        update(item.id, { ...item.card, status: changed ? 'applied' : 'NO_CHANGES', ms })
+    }
+
     function rerun(item) {
         update(item.id, cardFor(engine, item.card.action))
     }
@@ -203,7 +246,7 @@ export default function AiPanel({ engine, selectionRect, activeCell, onClose }) 
     return (
         <aside className="ai-panel" aria-label="Ask AI">
             <div className="ai-header">
-                <strong>Ask your data</strong>
+                <strong>Ask AI</strong>
                 <select className="toolbar-select" value={providerKind} onChange={(e) => switchProvider(e.target.value)} title="Provider">
                     <option value="mock">mock (offline)</option>
                     <option value="http">http (live model)</option>
@@ -225,6 +268,8 @@ export default function AiPanel({ engine, selectionRect, activeCell, onClose }) 
                         engine={engine}
                         activeCell={activeCell}
                         onRerun={() => rerun(item)}
+                        onApply={() => applyFormat(item)}
+                        onDiscard={() => update(item.id, { ...item.card, status: 'discarded' })}
                         onInsert={insert}
                         onUseColumn={(prompt, missing, column) => {
                             setInput(prompt.replace(new RegExp(missing.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), column))
