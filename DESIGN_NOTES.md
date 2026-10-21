@@ -71,6 +71,7 @@ Structural edits (insert/delete row/column, and sort later) are a remap of indic
 | Apply / clear a column filter, Clear all filters | That filter change. |
 | Resize a column/row (drag), auto-fit (double-click the border) | That size. Resizing one of several selected columns resizes all of them in one step. |
 | Freeze row 1 / Freeze col A toggles | The freeze change. |
+| AI: Insert into sheet | Every inserted cell. |
 | Load sample | The whole load (previous sheet comes back). |
 | Clear all | Everything it cleared. |
 
@@ -135,6 +136,9 @@ Method: `npm run build && npm run preview`, then open `/?bench` in Chrome. The p
 | sales-large.tsv, sort by Date | 2,990 rows, engine only | 12.8 ms |
 | same, in the UI | Click on the header button until the frame is painted (`sort → paint` user-timing measure, 3 runs) | 28–62 ms (engine 11–37 ms) |
 
+| Any golden plan over sales-large < 50 ms | Executor per plan, median of 5; the slowest plan reported (`query-golden-slowest`) | 6.3 ms (snapshotting the sheet adds 1.2 ms) |
+| Two-level group-by over 100,000 rows < 500 ms | Region × Category with sum/avg/count over generated messy rows | 76 ms |
+
 Grid budgets. Measured on the production build in Chrome 155, driven headlessly by Playwright. Headless Chrome caps animation frames at 30 fps, so frame-time runs use `--disable-frame-rate-limit --disable-gpu-vsync`: each frame then takes exactly as long as its work, and a frame under 16.7 ms means 60 fps is achievable. Headless rasterizes on the CPU, so paint numbers are pessimistic compared with a normal GPU-backed window. Sheet for the scroll and typing runs: sales-large plus `K2:K100000 = J*2` (about 130,000 filled cells).
 
 | Budget | How | Result |
@@ -149,6 +153,40 @@ Grid budgets. Measured on the production build in Chrome 155, driven headlessly 
 Profiling. A trace of fast scrolling first showed about 4 ms script, 3.6 ms paint and 2 ms each for style and layout per frame. The three changes that helped: cells as `contain: strict` blocks, not flex containers with attribute-substring alignment selectors; a smaller step and overscan, which renders about 850 cells instead of 1,150; and taking the editor subscription out of the grid. I also tried keying cells by slot to recycle DOM nodes. It didn't help, because the window size never matches the slot count, so I reverted it.
 
 UI actions are wrapped in `timed()` (`src/perf.js`), which records `performance.measure` entries. They show in the DevTools performance panel and can be read back with `performance.getEntriesByName('sort → paint')`.
+
+## AI
+
+**Provider.** `createHttpProvider` speaks the OpenAI-compatible `/chat/completions` format with plain `fetch`. It defaults to Groq (`llama-3.3-70b-versatile`) because it is free and allows browser requests (CORS), so no backend is needed; any compatible endpoint works through `VITE_AI_ENDPOINT` / `VITE_AI_MODEL`. Only `provider.js` knows the vendor. The panel has a mock/http switch. Note: `VITE_*` values are bundled into the client, so this suits a local demo; a production build should proxy the call through a server.
+
+**Flow.** `ask()` builds the context and system prompt, calls `provider.complete`, then `parseAction`: extract JSON → `JSON.parse` → validate against the schema for its `type`. Only a valid action reaches the executor. The card is built from `executeQuery`'s result; the model's text is never shown as an answer (it is visible only under "Show plan").
+
+**Context sent** (inside the system prompt, so the user turn is exactly what was typed and the mock can match it):
+
+```json
+{
+  "range": "A1:J2992", "rowCount": 2991,
+  "columns": [{ "name": "Order ID", "index": 0, "letter": "A", "type": "id", "examples": ["ORD-10001", "ORD-10002", "ORD-10003"] }, "…one per column"],
+  "sampleRows": [["ORD-10001", "2023-02-03", "Central", "…"], "…5 rows"],
+  "selection": "C2:C10",
+  "hasTotalsRow": true
+}
+```
+
+Types are inferred from up to 200 values per column: percent, currency, date, id, number, else text. History: the last 6 turns (prompt + raw reply) are sent for refinement.
+
+**Failures. Each one shows a card and changes nothing:**
+
+| Case | Result |
+|---|---|
+| No JSON / unparsable JSON | `INVALID_RESPONSE` with the parser message |
+| JSON fails the schema | `INVALID_RESPONSE` listing every problem with its path (`/filters/0/op: must be one of …`) |
+| Any `type` other than query / format_sheet / clarify | `READ_ONLY`. The prompt tells the model to label change requests `{"type":"mutation"}`, so "Delete all orders…" is refused by code, not by trusting the model. |
+| Unknown column | Executor returns `UNKNOWN_COLUMN:<name>`; the card asks which column was meant and lists the real ones. It never guesses. |
+| Network / 401-403 / 429 / other HTTP | `PROVIDER_ERROR` with kind and the provider's message (and Retry-After for 429) |
+
+**Executor notes.** Row results are raw cell text; numbers in results are rounded to 2 decimals. `limit` is capped at 500 in code whatever the plan says. A descending sort reverses the whole comparison (contract §3.5 does not pin blanks), unlike the grid sort, which keeps blanks last.
+
+**Insert into sheet** writes the header plus rows at the chosen cell with `setValues`, one undo step. **Re-run** re-executes the stored plan on the current sheet with no model call.
 
 ## Trade-offs and what I would do next
 
