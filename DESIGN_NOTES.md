@@ -5,6 +5,7 @@
 - **Challenge 1: range selection and fill handle.** Selection model in `src/grid/selection.js`, series detection in `src/engine/fill.js`, `engine.fill()` in `src/engine/core.js`. All four acceptance checks are covered by tests in `src/engine/fill.test.js` (run against the real `fixtures/sales.tsv`).
 - **Challenge 2: sort and filter.** `engine.sort()` / `engine.setFilter()` in `src/engine/core.js`, comparison in `src/engine/sort.js`, predicates in `src/engine/filter.js`, dropdown in `src/grid/FilterMenu.jsx`. Acceptance checks are in `src/engine/sort.test.js`; I also ran them through the UI in Chrome.
 - **Challenge 3: virtualized grid at scale.** `src/grid/Grid.jsx` (layers, windowing, resize, frozen panes), `src/grid/axis.js` (prefix sums + binary search), name box in `src/grid/FormulaBar.jsx`, keyboard handling in `src/App.jsx`. The sheet is 100,000 × 200.
+- **Challenge 4: ask your data.** `src/ai/`: `parse.js` (JSON extraction), `validate.js` (schema validator), `actions.js` (guard), `executor.js`, `context.js`, `prompt.js`, `assistant.js`, `provider.js`, and the panel `AiPanel.jsx` (Ctrl+K). All 20 golden queries pass in `src/ai/executor.test.js`, both from the plan and through the mock provider's wrapped text.
 
 ## Data model changes
 

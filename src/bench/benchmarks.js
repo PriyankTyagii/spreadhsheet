@@ -6,6 +6,9 @@
 import { createEngine } from '../engine/core.js'
 import { parseTsv } from '../fixtures/loadSample.js'
 import salesLarge from '../../fixtures/sales-large.tsv?raw'
+import queries from '../../fixtures/ai-eval/queries.json'
+import { readTable } from '../ai/table.js'
+import { executeQuery } from '../ai/executor.js'
 
 function median(xs) {
     const s = [...xs].sort((a, b) => a - b)
@@ -96,6 +99,50 @@ BENCHMARKS.push(
             const e = largeWithFormulas()
             let n = 0
             return time(9, () => e, (eng) => eng.setCell(94999, 9, String(100 + n++)))
+        },
+    },
+)
+
+BENCHMARKS.push(
+    {
+        id: 'query-golden-slowest',
+        label: 'Slowest of the 20 golden query plans over sales-large (executor only; median per plan, max reported)',
+        budget: 50,
+        run: () => {
+            const table = readTable(loadLarge(5000, 30))
+            let worst = { ms: 0, samples: [] }
+            for (const c of queries.cases) {
+                if (c.plan.type !== 'query') continue
+                const t = time(5, () => table, (tb) => executeQuery(c.plan, tb))
+                if (t.ms > worst.ms) worst = t
+            }
+            return worst
+        },
+    },
+    {
+        id: 'query-read-table',
+        label: 'Snapshot sales-large for the executor (readTable, 2,991 × 10 cells)',
+        budget: null,
+        run: () => { const e = loadLarge(5000, 30); return time(5, () => e, (eng) => readTable(eng)) },
+    },
+    {
+        id: 'query-groupby-100k',
+        label: 'Two-level group-by (Region, Category) with sum/avg/count over 100,000 generated rows',
+        budget: 500,
+        run: () => {
+            const regions = ['North', 'South', 'East', 'West ', 'central']
+            const cats = ['Electronics', 'Furniture', 'Accessories', 'software']
+            const rows = []
+            for (let i = 0; i < 100000; i++) {
+                rows.push([`ORD-${i}`, regions[i % 5], cats[(i * 7) % 4], String(i % 50), `$${(i % 997) * 3}.50`])
+            }
+            const table = { header: ['Order ID', 'Region', 'Category', 'Units', 'Total'], rows }
+            const plan = {
+                type: 'query', groupBy: ['Region', 'Category'],
+                aggregates: [{ fn: 'sum', column: 'Total', as: 'Sales' }, { fn: 'avg', column: 'Units', as: 'Avg units' }, { fn: 'count', column: 'Order ID', as: 'Orders' }],
+                sort: [{ column: 'Region' }, { column: 'Sales', dir: 'desc' }],
+            }
+            return time(5, () => table, (tb) => executeQuery(plan, tb))
         },
     },
 )
