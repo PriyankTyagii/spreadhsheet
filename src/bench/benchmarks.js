@@ -69,6 +69,37 @@ export const BENCHMARKS = [
     },
 ]
 
+/** sales-large plus K = J*2 down to row 100,000. */
+function largeWithFormulas() {
+    const e = loadLarge()
+    e.setCell(1, 10, '=J2*2')
+    e.fill({ r1: 1, c1: 10, r2: 1, c2: 10 }, { r1: 1, c1: 10, r2: 99999, c2: 10 })
+    return e
+}
+
+BENCHMARKS.push(
+    {
+        id: 'fill-100k',
+        label: 'Ctrl+D K2:K100000 with =J2*2 on sales-large (99,999 formulas parsed, indexed and evaluated)',
+        budget: null,
+        run: () => time(3, () => {
+            const e = loadLarge()
+            e.setCell(1, 10, '=J2*2')
+            return e
+        }, (e) => e.fill({ r1: 1, c1: 10, r2: 1, c2: 10 }, { r1: 1, c1: 10, r2: 99999, c2: 10 })),
+    },
+    {
+        id: 'edit-far',
+        label: 'Commit an edit to J95000 with 100k formulas + 30k values on the sheet (recalc of dependents only)',
+        budget: 16,
+        run: () => {
+            const e = largeWithFormulas()
+            let n = 0
+            return time(9, () => e, (eng) => eng.setCell(94999, 9, String(100 + n++)))
+        },
+    },
+)
+
 export function runAll(list = BENCHMARKS) {
     return list.map(b => {
         const { ms, samples } = b.run()
