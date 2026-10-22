@@ -40,7 +40,7 @@ const env = (typeof import.meta !== 'undefined' && import.meta.env) || {}
 export function createHttpProvider(config = {}) {
     const endpoint = config.endpoint || env.VITE_AI_ENDPOINT || 'https://api.groq.com/openai/v1/chat/completions'
     const apiKey = config.apiKey ?? env.VITE_AI_API_KEY
-    const model = config.model || env.VITE_AI_MODEL || 'llama-3.3-70b-versatile'
+    const model = config.model || env.VITE_AI_MODEL || 'openai/gpt-oss-120b'
     const fetchImpl = config.fetch ?? ((...args) => fetch(...args))
 
     return {

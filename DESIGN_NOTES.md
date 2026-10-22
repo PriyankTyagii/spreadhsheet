@@ -160,7 +160,7 @@ UI actions are wrapped in `timed()` (`src/perf.js`), which records `performance.
 
 ## AI
 
-**Provider.** `createHttpProvider` speaks the OpenAI-compatible `/chat/completions` format with plain `fetch`. It defaults to Groq (`llama-3.3-70b-versatile`) because it is free and allows browser requests (CORS), so no backend is needed; any compatible endpoint works through `VITE_AI_ENDPOINT` / `VITE_AI_MODEL`. Only `provider.js` knows the vendor. The panel has a mock/http switch. Note: `VITE_*` values are bundled into the client, so this suits a local demo; a production build should proxy the call through a server.
+**Provider.** `createHttpProvider` speaks the OpenAI-compatible `/chat/completions` format with plain `fetch`. It defaults to Groq (`openai/gpt-oss-120b`; Groq has retired `llama-3.3-70b-versatile`) because it is free and allows browser requests (CORS), so no backend is needed; any compatible endpoint works through `VITE_AI_ENDPOINT` / `VITE_AI_MODEL`. Only `provider.js` knows the vendor. The panel has a mock/http switch. Note: `VITE_*` values are bundled into the client, so this suits a local demo; a production build should proxy the call through a server.
 
 **Flow.** `ask()` builds the context and system prompt, calls `provider.complete`, then `parseAction`: extract JSON → `JSON.parse` → validate against the schema for its `type`. Only a valid action reaches the executor. The card is built from `executeQuery`'s result; the model's text is never shown as an answer (it is visible only under "Show plan").
 
@@ -187,6 +187,8 @@ Types are inferred from up to 200 values per column: percent, currency, date, id
 | Any `type` other than query / format_sheet / clarify | `READ_ONLY`. The prompt tells the model to label change requests `{"type":"mutation"}`, so "Delete all orders…" is refused by code, not by trusting the model. |
 | Unknown column | Executor returns `UNKNOWN_COLUMN:<name>`; the card asks which column was meant and lists the real ones. It never guesses. |
 | Network / 401-403 / 429 / other HTTP | `PROVIDER_ERROR` with kind and the provider's message (and Retry-After for 429) |
+
+**Live-model check.** With Groq `openai/gpt-oss-120b`, the live model produced plans whose computed results match the golden answers for q01 (sales by region), q02 (top 3 reps), q07 (February orders = 128) and q04 (average Electronics discount = 0.1). q16 was refused as READ_ONLY. "Format this as a clean table" gave a valid preview. The first prompt wording let the model map "territory" to Region, a silent guess; adding that exact case to the system prompt as an example fixed it, and q14 now ends in the "which column did you mean?" card. Groq's free tier allows 8,000 tokens per minute, about three requests, because each request carries the schemas and context. A 429 shows as a "Rate limited" card with the retry time.
 
 **Executor notes.** Row results are raw cell text; numbers in results are rounded to 2 decimals. `limit` is capped at 500 in code whatever the plan says. A descending sort reverses the whole comparison (contract §3.5 does not pin blanks), unlike the grid sort, which keeps blanks last.
 
